@@ -71,7 +71,7 @@ export function useWalletIntegration() {
           localStorage.setItem('nrj_token_mint', NRJ_TOKEN_MINT);
           return NRJ_TOKEN_MINT;
         }
-      }
+      } 
 
       // Priority 2: token with the highest balance (most likely NRJ)
       const nonZero = accounts.filter((a) => a.balance > 0);
