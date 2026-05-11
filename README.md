@@ -1,36 +1,258 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# 🚀 Neeraj Pay — Solana Web3 Dashboard
 
-## Getting Started
+A production-grade Solana crypto dashboard built with Next.js 16, TypeScript, TailwindCSS, and the Solana Web3.js stack. Connect your Phantom wallet, send SOL, manage NRJ tokens, view transaction history, and interact with the Solana Devnet.
 
-First, run the development server:
+---
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+## Features
+
+| Feature | Status |
+|---------|--------|
+| Connect Phantom Wallet | Done |
+| Auto-reconnect wallet | Done |
+| View SOL Balance (real-time) | Done |
+| Send SOL with memo | Done |
+| Create NRJ SPL Token | Done |
+| Mint NRJ Tokens | Done |
+| Transfer NRJ Tokens | Done |
+| Transaction History | Done |
+| Solscan links | Done |
+| QR Code receiver | Done |
+| Network Status (TPS/Slot/Epoch) | Done |
+| Transaction Analytics Chart | Done |
+| Toast Notifications | Done |
+| Dark Premium UI | Done |
+| Redux Toolkit State | Done |
+| Zod Validation | Done |
+| Backend API (Express + Prisma) | Done |
+| Docker support | Done |
+| CI/CD Pipeline | Done |
+
+---
+
+## Tech Stack
+
+### Frontend
+- Next.js 16 (App Router, Turbopack)
+- TypeScript - full type safety
+- TailwindCSS - custom dark theme with glassmorphism
+- Redux Toolkit - global state management
+- React Hook Form + Zod - form validation
+- Recharts - transaction analytics
+
+### Blockchain
+- @solana/web3.js - core Solana primitives
+- @solana/spl-token - SPL token creation and transfer
+- @solana/wallet-adapter-react - wallet connection
+- @solana/wallet-adapter-react-ui - wallet modal
+- Phantom, Solflare, Torus wallets supported
+
+### Backend
+- Express.js - REST API
+- Prisma ORM - type-safe DB queries
+- PostgreSQL - transaction storage
+- express-rate-limit - rate limiting
+- Helmet - security headers
+
+---
+
+## Project Structure
+
+```
+neeraj-pay/
+app/
+  layout.tsx          # Root layout with providers
+  page.tsx            # Main dashboard page
+  globals.css         # Premium dark theme
+  providers.tsx       # Redux + Solana providers
+
+components/
+  dashboard/
+    Navbar.tsx             # Sticky navbar with wallet dropdown
+    WalletOverview.tsx     # Balance cards
+    TokenManagement.tsx    # Create/mint NRJ tokens
+    TransactionHistory.tsx # Paginated tx list
+    TransactionChart.tsx   # 7-day analytics chart
+    NetworkStatus.tsx      # Live Solana network info
+  forms/
+    SendSolForm.tsx        # SOL transfer form
+    SendTokenForm.tsx      # NRJ token transfer form
+  wallet/
+    WalletQRCode.tsx       # QR code receiver
+    WalletWatcher.tsx      # Wallet Redux bridge
+
+services/solana/
+  connection.ts       # Singleton RPC connection
+  balance.ts          # SOL and token balance queries
+  transfer.ts         # SOL transfer with retry
+  token.ts            # SPL token create/mint/transfer
+  transactions.ts     # Transaction history and network status
+
+hooks/
+  useWalletIntegration.ts   # Wallet Redux sync
+  useTransfer.ts            # SOL and token transfer hooks
+
+store/
+  index.ts            # Redux store
+  walletSlice.ts      # Wallet state
+  transactionsSlice.ts # Transaction state
+  tokenSlice.ts       # Token state
+
+backend/
+  server.ts           # Express server
+  routes/
+    transactions.ts # Transaction CRUD API
+    wallet.ts       # Wallet info API
+
+types/index.ts          # TypeScript types
+constants/index.ts      # App constants
+lib/
+  utils.ts            # Utility functions
+  validations.ts      # Zod schemas
+
+prisma/schema.prisma    # Database schema
+Dockerfile              # Production container
+docker-compose.yml      # Full stack Docker
+.github/workflows/ci.yml # CI/CD pipeline
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+---
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Quick Start
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+### Prerequisites
+- Node.js 20+
+- PostgreSQL (or Docker)
+- Phantom Wallet browser extension
 
-## Learn More
+### 1. Install
+```bash
+cd neeraj-pay
+npm install
+```
 
-To learn more about Next.js, take a look at the following resources:
+### 2. Environment Setup
+```bash
+cp .env.local .env.local.example
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Required variables:
+```
+NEXT_PUBLIC_SOLANA_NETWORK=devnet
+NEXT_PUBLIC_SOLANA_RPC_URL=https://api.devnet.solana.com
+DATABASE_URL=postgresql://postgres:password@localhost:5432/neeraj_pay
+JWT_SECRET=your-secret-key
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+### 3. Database Setup
+```bash
+npx prisma migrate dev --name init
+npx prisma generate
+```
 
-## Deploy on Vercel
+### 4. Start Development
+```bash
+npm run dev
+# App runs at http://localhost:3000
+```
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+---
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Docker
+
+```bash
+docker-compose up -d
+docker-compose logs -f app
+```
+
+---
+
+## Devnet Setup Guide
+
+### Get Test SOL
+1. Go to https://faucet.solana.com
+2. Enter your wallet address
+3. Request 2 SOL (Devnet)
+
+Or use the CLI:
+```bash
+solana airdrop 2 YOUR_WALLET_ADDRESS --url devnet
+```
+
+### Create NRJ Token
+1. Connect your Phantom wallet (set to Devnet)
+2. Go to the Tokens tab
+3. Click Create NRJ Token
+4. Confirm transaction in Phantom
+5. Copy the mint address displayed
+
+### Mint NRJ Tokens
+1. Go to Tokens then Mint Tokens tab
+2. Enter amount (e.g. 1000000)
+3. Click Mint NRJ Tokens
+4. Confirm in Phantom
+
+---
+
+## Security Features
+
+- Never touches private keys, uses Wallet Adapter signing only
+- Zod input validation on all forms
+- Server-side Solana address validation
+- Rate limiting (100 req/15min)
+- Helmet security headers
+- CORS protection
+- Input sanitization
+
+---
+
+## Production Deployment
+
+### Environment Variables
+```
+NEXT_PUBLIC_SOLANA_NETWORK=mainnet-beta
+NEXT_PUBLIC_SOLANA_RPC_URL=https://your-rpc-endpoint.com
+DATABASE_URL=postgresql://user:pass@host:5432/db
+JWT_SECRET=strong-random-secret
+```
+
+### Build
+```bash
+npm run build
+npm start
+```
+
+### Vercel
+```bash
+vercel --prod
+```
+
+---
+
+## API Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | /api/wallet/:address | Get wallet info and balance |
+| GET | /api/transactions?wallet= | List transactions |
+| POST | /api/transactions | Save transaction |
+| GET | /health | Health check |
+
+---
+
+## NRJ Token Details
+
+| Field | Value |
+|-------|-------|
+| Name | Neeraj Token |
+| Symbol | NRJ |
+| Decimals | 9 |
+| Standard | SPL Token |
+| Network | Solana Devnet |
+| Authority | Connected wallet |
+
+---
+
+## License
+
+MIT License - Built with love on Solana

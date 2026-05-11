@@ -1,0 +1,70 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Wallet {
+  id          String   @id @default(cuid())
+  address     String   @unique
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  transactions Transaction[]
+  
+  @@map("wallets")
+}
+
+model Transaction {
+  id          String            @id @default(cuid())
+  signature   String            @unique
+  walletId    String
+  wallet      Wallet            @relation(fields: [walletId], references: [id])
+  type        TransactionType
+  amount      Float
+  tokenMint   String?
+  fromAddress String
+  toAddress   String
+  status      TransactionStatus @default(PENDING)
+  blockTime   DateTime?
+  slot        Int?
+  fee         Float?
+  memo        String?
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+  
+  @@map("transactions")
+}
+
+model TokenAccount {
+  id          String   @id @default(cuid())
+  walletId    String
+  mintAddress String
+  tokenName   String?
+  tokenSymbol String?
+  decimals    Int      @default(9)
+  balance     Float    @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  @@map("token_accounts")
+}
+
+enum TransactionType {
+  SOL_TRANSFER
+  TOKEN_TRANSFER
+  TOKEN_MINT
+  TOKEN_CREATE
+}
+
+enum TransactionStatus {
+  PENDING
+  CONFIRMED
+  FAILED
+}
