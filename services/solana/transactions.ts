@@ -42,7 +42,8 @@ export async function getTransactionSignatures(
 }
 
 /**
- * Parse a single transaction into our Transaction type
+ * Parse a single transaction into our Transaction type.
+ * Returns a best-effort result — never returns null for confirmed txs.
  */
 function parseTransaction(
   tx: ParsedTransactionWithMeta | null,
@@ -52,70 +53,92 @@ function parseTransaction(
   if (!tx || !tx.meta) return null;
 
   const accountKeys = tx.transaction.message.accountKeys;
-  const walletPubkey = walletAddress.toLowerCase();
-
-  // Determine if this is a SOL transfer
-  const preBalances = tx.meta.preBalances;
-  const postBalances = tx.meta.postBalances;
+  const walletPubkeyLower = walletAddress.toLowerCase();
 
   // Find wallet index in accounts
   const walletIndex = accountKeys.findIndex(
-    (key) => key.pubkey.toString().toLowerCase() === walletPubkey
+    (key) => key.pubkey.toString().toLowerCase() === walletPubkeyLower
   );
 
+  // If wallet isn't in the accounts at all, skip
   if (walletIndex === -1) return null;
 
+  const preBalances = tx.meta.preBalances;
+  const postBalances = tx.meta.postBalances;
   const balanceDiff = postBalances[walletIndex] - preBalances[walletIndex];
   const isReceiving = balanceDiff > 0;
 
-  // Determine transaction type
+  // Detect token transactions
+  const postTokenBals = tx.meta.postTokenBalances || [];
+  const preTokenBals  = tx.meta.preTokenBalances  || [];
+  const hasTokenActivity = postTokenBals.length > 0 || preTokenBals.length > 0;
+
   let txType: Transaction['type'] = 'SOL_TRANSFER';
   let amount = Math.abs(balanceDiff) / LAMPORTS_PER_SOL;
-  let fromAddress = '';
-  let toAddress = '';
+  let tokenMint: string | undefined;
 
-  // Check for token transfers in inner instructions
-  const tokenBalances = tx.meta.postTokenBalances || [];
-  const preTokenBalances = tx.meta.preTokenBalances || [];
+  if (hasTokenActivity) {
+    // Try to figure out if this is a mint or a transfer
+    const isMint = preTokenBals.length === 0 && postTokenBals.length > 0;
+    txType = isMint ? 'TOKEN_MINT' : 'TOKEN_TRANSFER';
 
-  if (tokenBalances.length > 0 || preTokenBalances.length > 0) {
-    txType = 'TOKEN_TRANSFER';
-    // Calculate token amount from balance changes
-    const tokenDiff = tokenBalances.find(
-      (b) => b.owner === walletAddress
-    );
-    if (tokenDiff) {
-      amount = tokenDiff.uiTokenAmount.uiAmount || 0;
+    // Find token amount change for this wallet
+    const relevant =
+      postTokenBals.find((b) => b.owner === walletAddress) ||
+      preTokenBals.find((b)  => b.owner === walletAddress);
+
+    if (relevant) {
+      const pre  = preTokenBals.find((b)  => b.accountIndex === relevant.accountIndex);
+      const post = postTokenBals.find((b) => b.accountIndex === relevant.accountIndex);
+      const preAmt  = pre?.uiTokenAmount.uiAmount  || 0;
+      const postAmt = post?.uiTokenAmount.uiAmount || 0;
+      amount = Math.abs(postAmt - preAmt);
+      tokenMint = relevant.mint;
     }
   }
 
-  // Extract from/to addresses for SOL transfer
-  if (txType === 'SOL_TRANSFER') {
-    const fromIndex = preBalances.findIndex(
-      (_, i) => preBalances[i] - postBalances[i] > 0 && i !== walletIndex
-    );
-    const toIndex = postBalances.findIndex(
-      (_, i) => postBalances[i] - preBalances[i] > 0 && i !== walletIndex
-    );
+  // Derive from/to addresses — best effort
+  let fromAddress = accountKeys[0]?.pubkey.toString() || walletAddress;
+  let toAddress   = accountKeys[1]?.pubkey.toString() || walletAddress;
 
-    fromAddress = isReceiving
-      ? accountKeys[fromIndex >= 0 ? fromIndex : 0]?.pubkey.toString() || ''
-      : walletAddress;
-    toAddress = isReceiving
-      ? walletAddress
-      : accountKeys[toIndex >= 0 ? toIndex : 1]?.pubkey.toString() || '';
+  if (txType === 'SOL_TRANSFER') {
+    if (isReceiving) {
+      toAddress = walletAddress;
+      // Find the sender (largest decrease)
+      const senderIdx = preBalances
+        .map((pre, i) => ({ diff: pre - postBalances[i], i }))
+        .filter(({ i }) => i !== walletIndex)
+        .sort((a, b) => b.diff - a.diff)[0]?.i;
+      fromAddress = senderIdx !== undefined
+        ? accountKeys[senderIdx].pubkey.toString()
+        : accountKeys[0].pubkey.toString();
+    } else {
+      fromAddress = walletAddress;
+      // Find the receiver (largest increase)
+      const receiverIdx = postBalances
+        .map((post, i) => ({ diff: post - preBalances[i], i }))
+        .filter(({ i }) => i !== walletIndex)
+        .sort((a, b) => b.diff - a.diff)[0]?.i;
+      toAddress = receiverIdx !== undefined
+        ? accountKeys[receiverIdx].pubkey.toString()
+        : accountKeys[1]?.pubkey.toString() || walletAddress;
+    }
   }
+
+  // Skip zero-amount, zero-diff transactions (e.g. vote txs) that aren't relevant
+  if (amount === 0 && txType === 'SOL_TRANSFER') return null;
 
   return {
     signature,
     type: txType,
     amount,
-    fromAddress: fromAddress || accountKeys[0]?.pubkey.toString() || '',
-    toAddress: toAddress || accountKeys[1]?.pubkey.toString() || '',
+    tokenMint,
+    fromAddress,
+    toAddress,
     status: tx.meta.err ? 'FAILED' : 'CONFIRMED',
     blockTime: tx.blockTime || undefined,
     slot: tx.slot,
-    fee: tx.meta.fee / LAMPORTS_PER_SOL,
+    fee: (tx.meta.fee || 0) / LAMPORTS_PER_SOL,
   };
 }
 
@@ -125,16 +148,13 @@ function parseTransaction(
 export async function getWalletTransactions(
   params: FetchTransactionsParams
 ): Promise<Transaction[]> {
-  const { walletAddress, limit = 20, before } = params;
+  const { walletAddress, limit = 50, before } = params;
   const conn = params.connection || getConnection();
 
   try {
-    // Get signatures
-    const signatures = await getTransactionSignatures(params);
-
+    const signatures = await getTransactionSignatures({ ...params, limit });
     if (signatures.length === 0) return [];
 
-    // Fetch full transaction details in batches
     const batchSize = 10;
     const transactions: Transaction[] = [];
 
@@ -142,10 +162,7 @@ export async function getWalletTransactions(
       const batch = signatures.slice(i, i + batchSize);
       const txDetails = await conn.getParsedTransactions(
         batch.map((s) => s.signature),
-        {
-          commitment: 'confirmed',
-          maxSupportedTransactionVersion: 0,
-        }
+        { commitment: 'confirmed', maxSupportedTransactionVersion: 0 }
       );
 
       for (let j = 0; j < txDetails.length; j++) {

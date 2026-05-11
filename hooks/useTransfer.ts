@@ -175,9 +175,15 @@ export function useTokenTransfer() {
           })
         );
 
-        // Refresh balances after transfer
+        // Immediate refresh
         dispatch(fetchSolBalance(fromAddress));
         dispatch(fetchNRJBalance({ address: fromAddress, mintAddress }));
+
+        // Delayed refresh after confirmation settles on-chain (~2s)
+        setTimeout(() => {
+          dispatch(fetchSolBalance(fromAddress));
+          dispatch(fetchNRJBalance({ address: fromAddress, mintAddress }));
+        }, 2500);
 
         toast.dismiss(toastId);
         toast.success(
@@ -230,14 +236,18 @@ export function useTokenTransfer() {
           })
         );
 
-        // ✅ Refresh BOTH balances immediately after a successful mint
-        // SOL drops slightly (gas fee), NRJ balance increases
+        // Immediate refresh
         dispatch(fetchSolBalance(walletAddress));
         dispatch(fetchNRJBalance({ address: recipientAddress, mintAddress }));
-        // Also refresh sender's NRJ if minting to a different recipient
         if (recipientAddress !== walletAddress) {
           dispatch(fetchNRJBalance({ address: walletAddress, mintAddress }));
         }
+
+        // Delayed refresh after confirmation settles (~2s)
+        setTimeout(() => {
+          dispatch(fetchSolBalance(walletAddress));
+          dispatch(fetchNRJBalance({ address: walletAddress, mintAddress }));
+        }, 2500);
 
         toast.dismiss(toastId);
         toast.success('Tokens minted successfully! 🎉 Balance updated.', { duration: 5000 });
