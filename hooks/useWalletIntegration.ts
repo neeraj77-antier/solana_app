@@ -4,132 +4,171 @@ import { useEffect, useCallback, useRef } from 'react';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import { useAppDispatch, useAppSelector } from '@/store';
 import {
-  setConnected,
-  setDisconnected,
-  fetchSolBalance,
-  fetchNRJBalance,
+  setConnected, setDisconnected, fetchSolBalance, fetchNRJBalance,
 } from '@/store/walletSlice';
-import { fetchNRJTokenInfo } from '@/store/tokenSlice';
-import { clearTransactions, fetchTransactions } from '@/store/transactionsSlice';
-import { NRJ_TOKEN_MINT, BALANCE_REFRESH_INTERVAL } from '@/constants';
+import { setNRJMint, fetchNRJTokenInfo } from '@/store/tokenSlice';
+import { clearTransactions, fetchTransactions, loadCachedTransactions } from '@/store/transactionsSlice';
+import { NRJ_TOKEN_MINT } from '@/constants';
 import { PublicKey, LAMPORTS_PER_SOL } from '@solana/web3.js';
-import { getAssociatedTokenAddress } from '@solana/spl-token';
+import { getAllTokenAccounts } from '@/services/solana/balance';
 import toast from 'react-hot-toast';
+
+/**
+ * Polling interval — primary mechanism for balance updates.
+ * 10 seconds is fast enough to feel real-time but not too aggressive.
+ * WebSocket subscriptions are set up as a bonus for instant updates
+ * but we don't rely on them being stable (public devnet has WS issues).
+ */
+const POLL_MS = 10_000;
 
 export function useWalletIntegration() {
   const wallet = useWallet();
   const { connection } = useConnection();
   const dispatch = useAppDispatch();
-  const walletState = useAppSelector((state) => state.wallet);
-  const tokenState = useAppSelector((state) => state.tokens);
+  const walletState = useAppSelector((s) => s.wallet);
+  const tokenState  = useAppSelector((s) => s.tokens);
 
-  const prevAddressRef = useRef<string | null>(null);
-  const refreshIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const prevAddressRef  = useRef<string | null>(null);
+  const intervalRef     = useRef<ReturnType<typeof setInterval> | null>(null);
+  const solSubRef       = useRef<number | null>(null);
+  const logsSubRef      = useRef<number | null>(null);
+  const knownMintRef    = useRef<string | null>(null);
+  const discoveryRunRef = useRef<boolean>(false); // prevent concurrent discovery
 
-  // WebSocket subscription IDs — so we can cleanly unsubscribe
-  const solSubRef = useRef<number | null>(null);
-  const nrjSubRef = useRef<number | null>(null);
+  // ─── Resolve NRJ mint ────────────────────────────────────────────────────
 
-  /**
-   * Resolve NRJ mint: Redux → localStorage → env
-   */
   const getNRJMint = useCallback((): string | null => {
     if (tokenState.nrjToken?.mint) return tokenState.nrjToken.mint;
-    const saved = typeof window !== 'undefined' ? localStorage.getItem('nrj_token_mint') : null;
-    if (saved) return saved;
+    try {
+      const saved = typeof window !== 'undefined' ? localStorage.getItem('nrj_token_mint') : null;
+      if (saved) return saved;
+    } catch {}
     if (NRJ_TOKEN_MINT) return NRJ_TOKEN_MINT;
     return null;
   }, [tokenState.nrjToken?.mint]);
 
+  // ─── Auto-discover NRJ mint from on-chain token accounts ─────────────────
   /**
-   * Refresh all balances — uses the current mint address
+   * Called when we don't know the mint address.
+   * Scans all SPL token accounts of this wallet and:
+   *   1. Matches against NRJ_TOKEN_MINT env var (if set)
+   *   2. Falls back to the token account with the highest balance
+   * This lets receivers who have never visited the Tokens tab
+   * automatically detect incoming NRJ transfers.
+   */
+  const discoverNRJMint = useCallback(async (address: string): Promise<string | null> => {
+    if (discoveryRunRef.current) return null; // already running
+    discoveryRunRef.current = true;
+    try {
+      const accounts = await getAllTokenAccounts(address);
+      if (accounts.length === 0) return null;
+
+      // Priority 1: match against known env mint
+      if (NRJ_TOKEN_MINT) {
+        const match = accounts.find((a) => a.mint === NRJ_TOKEN_MINT);
+        if (match) {
+          dispatch(setNRJMint(NRJ_TOKEN_MINT));
+          localStorage.setItem('nrj_token_mint', NRJ_TOKEN_MINT);
+          return NRJ_TOKEN_MINT;
+        }
+      }
+
+      // Priority 2: token with the highest balance (most likely NRJ)
+      const nonZero = accounts.filter((a) => a.balance > 0);
+      if (nonZero.length > 0) {
+        const best = nonZero.sort((a, b) => b.balance - a.balance)[0];
+        dispatch(setNRJMint(best.mint));
+        localStorage.setItem('nrj_token_mint', best.mint);
+        return best.mint;
+      }
+
+      return null;
+    } catch {
+      return null;
+    } finally {
+      discoveryRunRef.current = false;
+    }
+  }, [dispatch]);
+
+  // ─── Core balance refresh — called every poll tick ───────────────────────
+  /**
+   * This is the primary update mechanism. On every tick:
+   * 1. Always fetch SOL balance
+   * 2. If mint is known → fetch NRJ balance directly
+   * 3. If mint is NOT known → scan token accounts to discover it
+   *
+   * This means even if Amit sends tokens to this wallet for the first time,
+   * within 10 seconds the mint will be discovered and balance updated.
    */
   const refreshBalances = useCallback(async () => {
     if (!wallet.publicKey) return;
     const address = wallet.publicKey.toString();
-    dispatch(fetchSolBalance(address));
-    const mintAddress = getNRJMint();
-    if (mintAddress) dispatch(fetchNRJBalance({ address, mintAddress }));
-  }, [wallet.publicKey, dispatch, getNRJMint]);
 
-  /**
-   * Remove existing WebSocket subscriptions
-   */
+    // Always refresh SOL
+    dispatch(fetchSolBalance(address));
+
+    let mint = getNRJMint();
+
+    // If mint unknown, try to discover it from on-chain token accounts
+    if (!mint) {
+      mint = await discoverNRJMint(address);
+    }
+
+    // Fetch NRJ balance if we know the mint
+    if (mint) {
+      dispatch(fetchNRJBalance({ address, mintAddress: mint }));
+    }
+  }, [wallet.publicKey, dispatch, getNRJMint, discoverNRJMint]);
+
+  // ─── Clean up WebSocket subscriptions ────────────────────────────────────
+
   const clearSubscriptions = useCallback(() => {
     if (solSubRef.current !== null) {
-      connection.removeAccountChangeListener(solSubRef.current).catch(() => {});
+      try { connection.removeAccountChangeListener(solSubRef.current); } catch {}
       solSubRef.current = null;
     }
-    if (nrjSubRef.current !== null) {
-      connection.removeAccountChangeListener(nrjSubRef.current).catch(() => {});
-      nrjSubRef.current = null;
+    if (logsSubRef.current !== null) {
+      try { connection.removeOnLogsListener(logsSubRef.current); } catch {}
+      logsSubRef.current = null;
     }
   }, [connection]);
 
-  /**
-   * Subscribe to SOL account changes (catches incoming SOL transfers)
-   */
-  const subscribeSol = useCallback((address: string) => {
-    if (solSubRef.current !== null) return; // already subscribed
-    try {
-      const pubkey = new PublicKey(address);
-      solSubRef.current = connection.onAccountChange(
-        pubkey,
-        (accountInfo) => {
-          const newBalance = accountInfo.lamports / LAMPORTS_PER_SOL;
-          // Dispatch a direct balance update (no round-trip RPC needed)
-          dispatch({ type: 'wallet/setSolBalance', payload: newBalance });
-          toast.success(`SOL balance updated: ${newBalance.toFixed(4)} SOL`, {
-            id: 'sol-ws-update', duration: 3000,
-          });
-        },
-        'confirmed'
-      );
-    } catch (err) {
-      console.warn('SOL subscription failed:', err);
-    }
-  }, [connection, dispatch]);
+  // ─── WebSocket subscriptions (best-effort, public devnet may drop these) ──
 
-  /**
-   * Subscribe to NRJ ATA (Associated Token Account) changes.
-   * This fires when anyone sends NRJ tokens to this wallet.
-   */
-  const subscribeNRJ = useCallback(async (address: string, mintAddress: string) => {
-    if (nrjSubRef.current !== null) return; // already subscribed
-    try {
-      const walletPubkey = new PublicKey(address);
-      const mintPubkey = new PublicKey(mintAddress);
-      const ata = await getAssociatedTokenAddress(mintPubkey, walletPubkey);
-
-      nrjSubRef.current = connection.onAccountChange(
-        ata,
-        () => {
-          // When ATA data changes, re-fetch the token balance
-          dispatch(fetchNRJBalance({ address, mintAddress }));
-          toast.success('NRJ balance updated!', {
-            id: 'nrj-ws-update', icon: '🪙', duration: 3000,
-          });
-        },
-        'confirmed'
-      );
-    } catch (err) {
-      console.warn('NRJ subscription failed (ATA may not exist yet):', err);
-    }
-  }, [connection, dispatch]);
-
-  /**
-   * Set up subscriptions whenever the wallet connects or mint changes
-   */
   const setupSubscriptions = useCallback(async (address: string) => {
     clearSubscriptions();
-    subscribeSol(address);
-    const mintAddress = getNRJMint();
-    if (mintAddress) await subscribeNRJ(address, mintAddress);
-  }, [clearSubscriptions, subscribeSol, subscribeNRJ, getNRJMint]);
 
-  /**
-   * Main wallet connect/disconnect effect
-   */
+    // SOL account change (instant SOL balance update)
+    try {
+      solSubRef.current = connection.onAccountChange(
+        new PublicKey(address),
+        (info) => {
+          const bal = info.lamports / LAMPORTS_PER_SOL;
+          dispatch({ type: 'wallet/setSolBalance', payload: bal });
+        },
+        'confirmed'
+      );
+    } catch {}
+
+    // Transaction logs (instant detection of ANY incoming transfer)
+    // Fires even for newly created ATAs (new token accounts)
+    try {
+      logsSubRef.current = connection.onLogs(
+        new PublicKey(address),
+        async (logs) => {
+          if (logs.err) return;
+          // Immediately do a full balance refresh when any tx hits this wallet
+          await refreshBalances();
+          // Also update transaction history after a small delay
+          setTimeout(() => dispatch(fetchTransactions({ walletAddress: address })), 2500);
+        },
+        'confirmed'
+      );
+    } catch {}
+  }, [connection, dispatch, clearSubscriptions, refreshBalances]);
+
+  // ─── Main wallet connect / disconnect effect ──────────────────────────────
+
   useEffect(() => {
     const address = wallet.publicKey?.toString() || null;
 
@@ -138,21 +177,32 @@ export function useWalletIntegration() {
       prevAddressRef.current = address;
       dispatch(setConnected({ address }));
 
-      // Fetch initial balances
-      dispatch(fetchSolBalance(address));
-      const mintAddress = getNRJMint();
-      if (mintAddress) {
-        dispatch(fetchNRJBalance({ address, mintAddress }));
-        dispatch(fetchNRJTokenInfo(mintAddress));
-      }
+      // Initial fetch (async, don't block)
+      (async () => {
+        dispatch(fetchSolBalance(address));
+        let mint = getNRJMint();
+        if (!mint) {
+          // May have received tokens before connecting — try to discover
+          mint = await discoverNRJMint(address);
+        }
+        if (mint) {
+          dispatch(fetchNRJBalance({ address, mintAddress: mint }));
+          dispatch(fetchNRJTokenInfo(mint));
+        }
+      })();
 
+      // Restore history cache instantly, then sync from chain
+      dispatch(loadCachedTransactions(address));
       dispatch(fetchTransactions({ walletAddress: address }));
 
-      // WebSocket subscriptions (real-time)
+      // WebSocket (best-effort instant updates)
       setupSubscriptions(address);
 
-      // Fallback polling (catches edge cases where WS might miss events)
-      refreshIntervalRef.current = setInterval(refreshBalances, BALANCE_REFRESH_INTERVAL);
+      // ── Polling (primary reliable mechanism) ──
+      // Runs every 10s regardless of WebSocket state
+      intervalRef.current = setInterval(() => {
+        refreshBalances();
+      }, POLL_MS);
 
       toast.success(`Wallet connected: ${address.slice(0, 8)}...`, { icon: '🔗' });
     }
@@ -163,52 +213,44 @@ export function useWalletIntegration() {
       dispatch(setDisconnected());
       dispatch(clearTransactions());
       clearSubscriptions();
-      if (refreshIntervalRef.current) {
-        clearInterval(refreshIntervalRef.current);
-        refreshIntervalRef.current = null;
-      }
+      if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
       toast('Wallet disconnected', { icon: '👋' });
     }
-  }, [wallet.connected, wallet.publicKey, dispatch, refreshBalances, getNRJMint, setupSubscriptions, clearSubscriptions]);
-
-  /**
-   * Re-subscribe to NRJ ATA whenever the mint address becomes known
-   * (e.g. after createNRJToken — the ATA might not have existed before)
-   */
-  useEffect(() => {
-    const mintAddress = getNRJMint();
-    if (!mintAddress || !wallet.publicKey || !wallet.connected) return;
-
-    const address = wallet.publicKey.toString();
-    dispatch(fetchNRJBalance({ address, mintAddress }));
-    dispatch(fetchNRJTokenInfo(mintAddress));
-
-    // Re-subscribe with the new mint (clears old sub automatically)
-    if (nrjSubRef.current === null) {
-      subscribeNRJ(address, mintAddress);
-    }
   }, [
-    tokenState.nrjToken?.mint,
-    wallet.publicKey,
-    wallet.connected,
-    dispatch,
-    getNRJMint,
-    subscribeNRJ,
+    wallet.connected, wallet.publicKey, dispatch,
+    refreshBalances, getNRJMint, discoverNRJMint, setupSubscriptions, clearSubscriptions,
   ]);
 
-  // Cleanup on unmount
+  // ─── Re-run when mint becomes known (e.g. after creating the NRJ token) ───
+
+  useEffect(() => {
+    const mint = getNRJMint();
+    if (!mint || !wallet.publicKey || !wallet.connected) return;
+    if (mint === knownMintRef.current) return;
+    knownMintRef.current = mint;
+
+    const address = wallet.publicKey.toString();
+    dispatch(fetchNRJBalance({ address, mintAddress: mint }));
+    dispatch(fetchNRJTokenInfo(mint));
+
+    // Re-setup subscriptions so onLogs closure captures latest mint
+    setupSubscriptions(address);
+  }, [
+    tokenState.nrjToken?.mint, wallet.publicKey, wallet.connected,
+    dispatch, getNRJMint, setupSubscriptions,
+  ]);
+
+  // ─── Cleanup on unmount ───────────────────────────────────────────────────
+
   useEffect(() => {
     return () => {
       clearSubscriptions();
-      if (refreshIntervalRef.current) clearInterval(refreshIntervalRef.current);
+      if (intervalRef.current) clearInterval(intervalRef.current);
     };
   }, [clearSubscriptions]);
 
   return {
-    wallet,
-    connection,
-    walletState,
-    refreshBalances,
+    wallet, connection, walletState, refreshBalances,
     isConnected: walletState.connected,
     address: walletState.address,
     solBalance: walletState.balance,

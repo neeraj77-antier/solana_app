@@ -90,6 +90,7 @@ export function useSolTransfer() {
             status: 'CONFIRMED',
             blockTime: Math.floor(Date.now() / 1000),
             fee: result.fee,
+            walletAddress: fromAddress,
           })
         );
 
@@ -172,6 +173,7 @@ export function useTokenTransfer() {
             toAddress,
             status: 'CONFIRMED',
             blockTime: Math.floor(Date.now() / 1000),
+            walletAddress: fromAddress,
           })
         );
 
@@ -233,6 +235,7 @@ export function useTokenTransfer() {
             toAddress: recipientAddress,
             status: 'CONFIRMED',
             blockTime: Math.floor(Date.now() / 1000),
+            walletAddress,
           })
         );
 

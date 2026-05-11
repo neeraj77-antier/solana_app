@@ -2,7 +2,7 @@
 
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import { useAppSelector } from '@/store';
-import { useWalletIntegration } from '@/hooks/useWalletIntegration';
+
 import { copyToClipboard, shortenAddress } from '@/lib/utils';
 import { Wallet, Copy, LogOut, ChevronDown, Zap } from 'lucide-react';
 import { useState } from 'react';
@@ -47,7 +47,7 @@ export function Navbar() {
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <span style={{ fontSize: 18, fontWeight: 800, color: '#f1f5f9', letterSpacing: '-0.02em' }}>
-                Neeraj Pay
+                Neeraj - Pay
               </span>
               <span style={{
                 fontSize: 11, fontWeight: 700, padding: '3px 8px', borderRadius: 20,

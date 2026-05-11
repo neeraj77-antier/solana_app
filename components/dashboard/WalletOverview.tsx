@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useAppSelector } from '@/store';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
-import { useWalletIntegration } from '@/hooks/useWalletIntegration';
+import { useRefreshBalances } from '@/hooks/useRefreshBalances';
 import { Wallet, Coins, ArrowUpRight, ArrowDownLeft, RefreshCw, Copy } from 'lucide-react';
 import { copyToClipboard } from '@/lib/utils';
 import { SOLANA_NETWORK } from '@/constants';
@@ -73,7 +73,7 @@ function StatCard({
 
 export function WalletOverview() {
   const { setVisible } = useWalletModal();
-  const { refreshBalances } = useWalletIntegration();
+  const { refreshBalances } = useRefreshBalances();
   const walletState = useAppSelector((state) => state.wallet);
   const transactions = useAppSelector((state) => state.transactions.transactions);
   const [refreshing, setRefreshing] = useState(false);
