@@ -24,7 +24,7 @@ const TABS: { id: Tab; label: string; icon: React.ElementType; color: string }[]
   { id: 'history',  label: 'History',   icon: History,         color: '#06b6d4' },
   { id: 'tokens',   label: 'Tokens',    icon: Settings,        color: '#8b5cf6' },
   { id: 'network',  label: 'Network',   icon: Activity,        color: '#22c55e' },
-];
+]; 
 
 export default function DashboardPage() {
   const [active, setActive] = useState<Tab>('overview');
